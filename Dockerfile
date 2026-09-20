@@ -1,7 +1,15 @@
+# Frontend build stage
+FROM node:22-alpine AS web-builder
+WORKDIR /web
+COPY pansou-web/package.json pansou-web/package-lock.json ./
+RUN npm ci
+COPY pansou-web/ ./
+RUN npm run build
+
 # 构建阶段
 # 使用 --platform=$BUILDPLATFORM 确保构建器始终在运行 Actions 的机器的原生架构上运行 (通常是 linux/amd64)
 # $BUILDPLATFORM 是 buildx 自动提供的变量
-FROM --platform=$BUILDPLATFORM golang:1.24-alpine AS builder
+FROM golang:1.24-alpine AS builder
 
 # 安装构建依赖
 RUN apk add --no-cache git ca-certificates tzdata
@@ -43,6 +51,7 @@ RUN mkdir -p /app/cache
 # 从构建阶段复制可执行文件
 # buildx 会智能地从对应平台的 builder 中复制正确的可执行文件
 COPY --from=builder /app/pansou /app/pansou
+COPY --from=web-builder /web/dist /app/web
 
 # 设置工作目录
 WORKDIR /app
@@ -53,7 +62,8 @@ EXPOSE 8888
 # 设置环境变量
 # ENABLED_PLUGINS: 必须指定启用的插件，多个插件用逗号分隔
 # AUTH_ENABLED: 认证功能默认关闭，可通过环境变量启用
-ENV CACHE_PATH=/app/cache \
+ENV WEB_DIST_PATH=/app/web \
+    CACHE_PATH=/app/cache \
     CACHE_ENABLED=true \
     TZ=Asia/Shanghai \
     ASYNC_PLUGIN_ENABLED=true \

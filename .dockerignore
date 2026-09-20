@@ -34,3 +34,8 @@ tmp/
 # 其他
 Dockerfile
 .dockerignore 
+
+# Frontend local artifacts
+pansou-web/node_modules/
+pansou-web/dist/
+pansou-web/.vscode/
