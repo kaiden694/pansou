@@ -1371,39 +1371,69 @@ func (s *SearchService) searchPlugins(keyword string, plugins []string, forceRef
 		concurrency = config.AppConfig.DefaultConcurrency
 	}
 
-	// 使用工作池执行并行搜索
+	// 每个插件独立计时和超时，失败插件不会中断整次搜索。
+	type pluginTaskResult struct {
+		name     string
+		results  []model.SearchResult
+		err      error
+		timedOut bool
+		latency  time.Duration
+	}
+
 	tasks := make([]pool.Task, 0, len(availablePlugins))
 	for _, p := range availablePlugins {
-		plugin := p // 创建副本，避免闭包问题
+		currentPlugin := p
+		pluginName := currentPlugin.Name()
+		if !globalPluginHealthTracker.Allow(pluginName) {
+			continue
+		}
+
 		tasks = append(tasks, func() interface{} {
-			// 设置主缓存键和当前关键词
-			plugin.SetMainCacheKey(cacheKey)
-			plugin.SetCurrentKeyword(keyword)
+			started := time.Now()
+			currentPlugin.SetMainCacheKey(cacheKey)
+			currentPlugin.SetCurrentKeyword(keyword)
 
-			// 插件的Search方法已经负责异步调度、插件缓存和后台刷新。
-			// 这里直接调用，避免再包一层AsyncSearch导致嵌套等待和重复超时。
-			results, err := plugin.Search(keyword, ext)
+			resultCh := make(chan pluginTaskResult, 1)
+			go func() {
+				pluginResults, err := currentPlugin.Search(keyword, ext)
+				resultCh <- pluginTaskResult{name: pluginName, results: pluginResults, err: err, latency: time.Since(started)}
+			}()
 
-			if err != nil {
-				return nil
+			select {
+			case result := <-resultCh:
+				if result.err != nil {
+					globalPluginHealthTracker.RecordFailure(pluginName, result.latency, false)
+				} else {
+					globalPluginHealthTracker.RecordSuccess(pluginName, result.latency, len(result.results))
+				}
+				return result
+			case <-time.After(config.AppConfig.PluginTimeout):
+				latency := time.Since(started)
+				globalPluginHealthTracker.RecordFailure(pluginName, latency, true)
+				return pluginTaskResult{name: pluginName, err: context.DeadlineExceeded, timedOut: true, latency: latency}
 			}
-			return results
 		})
 	}
 
-	// 执行搜索任务并获取结果
-	results := pool.ExecuteBatchWithTimeout(tasks, concurrency, config.AppConfig.PluginTimeout)
+	batchCount := 1
+	if concurrency > 0 && len(tasks) > concurrency {
+		batchCount = (len(tasks) + concurrency - 1) / concurrency
+	}
+	batchTimeout := time.Duration(batchCount)*config.AppConfig.PluginTimeout + time.Second
+	results := pool.ExecuteBatchWithTimeout(tasks, concurrency, batchTimeout)
 
-	// 合并所有插件的结果，过滤掉无链接的结果
 	var allResults []model.SearchResult
-	for _, result := range results {
-		if result != nil {
-			pluginResults := result.([]model.SearchResult)
-			// 只添加有链接的结果到最终结果中
-			for _, pluginResult := range pluginResults {
-				if len(pluginResult.Links) > 0 {
-					allResults = append(allResults, pluginResult)
-				}
+	for _, rawResult := range results {
+		if rawResult == nil {
+			continue
+		}
+		result, ok := rawResult.(pluginTaskResult)
+		if !ok || result.err != nil {
+			continue
+		}
+		for _, pluginResult := range result.results {
+			if len(pluginResult.Links) > 0 {
+				allResults = append(allResults, pluginResult)
 			}
 		}
 	}

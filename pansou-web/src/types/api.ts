@@ -42,3 +42,25 @@ export interface HealthResponse {
   channels: string[]
   channels_count: number
 }
+
+
+export interface PluginHealth {
+  name: string
+  requests: number
+  successes: number
+  failures: number
+  timeouts: number
+  empty_results: number
+  consecutive_failures: number
+  average_latency_ms: number
+  last_success_at?: string
+  last_failure_at?: string
+  circuit_open: boolean
+  circuit_opened_at?: string
+  circuit_retry_at?: string
+}
+
+export interface PluginHealthResponse {
+  status: string
+  plugins: PluginHealth[]
+}

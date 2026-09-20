@@ -1,5 +1,5 @@
 import axios from 'axios'
-import type { HealthResponse, SearchResponse } from '../types/api'
+import type { HealthResponse, PluginHealthResponse, SearchResponse } from '../types/api'
 
 interface ApiResponse<T> {
   code: number
@@ -20,6 +20,11 @@ client.interceptors.request.use((config) => {
 
 export async function getHealth() {
   const { data } = await client.get<HealthResponse>('/health')
+  return data
+}
+
+export async function getPluginHealth() {
+  const { data } = await client.get<PluginHealthResponse>('/health/plugins')
   return data
 }
 

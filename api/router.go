@@ -46,6 +46,14 @@ func SetupRouter(searchService *service.SearchService) *gin.Engine {
 		api.GET("/search", SearchHandler) // 添加GET方式支持
 		api.POST("/check/links", CheckHandler)
 
+		// 插件运行健康度与熔断状态
+		api.GET("/health/plugins", func(c *gin.Context) {
+			c.JSON(http.StatusOK, gin.H{
+				"status":  "ok",
+				"plugins": service.GetPluginHealthSnapshot(),
+			})
+		})
+
 		// 健康检查接口
 		api.GET("/health", func(c *gin.Context) {
 			// 根据配置决定是否返回插件信息

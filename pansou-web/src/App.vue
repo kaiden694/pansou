@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { CopyDocument, Delete, Link, Lock, Refresh, Search, Star, StarFilled } from '@element-plus/icons-vue'
+import { CopyDocument, Delete, Link, Lock, Monitor, Refresh, Search, Star, StarFilled } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { getHealth, login, search as searchApi } from './api/client'
-import type { HealthResponse, MergedLink, SearchResponse } from './types/api'
+import { getHealth, getPluginHealth, login, search as searchApi } from './api/client'
+import type { HealthResponse, MergedLink, PluginHealth, SearchResponse } from './types/api'
 
 type Favorite = MergedLink & { type: string }
 
@@ -17,6 +17,36 @@ const loginVisible = ref(false)
 const username = ref('')
 const password = ref('')
 const loggingIn = ref(false)
+const pluginHealthVisible = ref(false)
+const pluginHealthLoading = ref(false)
+const pluginHealth = ref<PluginHealth[]>([])
+const pluginHealthError = ref('')
+
+const unhealthyPluginCount = computed(() => pluginHealth.value.filter((plugin) => plugin.circuit_open || plugin.failures > 0 || plugin.timeouts > 0).length)
+
+function successRate(plugin: PluginHealth) {
+  return plugin.requests ? Math.round((plugin.successes / plugin.requests) * 100) : 0
+}
+
+function formatDate(value?: string) {
+  if (!value || value.startsWith('0001-01-01')) return '暂无'
+  return new Intl.DateTimeFormat('zh-CN', { dateStyle: 'short', timeStyle: 'medium' }).format(new Date(value))
+}
+
+async function loadPluginHealth(showPanel = false) {
+  if (showPanel) pluginHealthVisible.value = true
+  pluginHealthLoading.value = true
+  pluginHealthError.value = ''
+  try {
+    const data = await getPluginHealth()
+    pluginHealth.value = data.plugins || []
+  } catch (error: any) {
+    pluginHealthError.value = error?.response?.data?.message || error?.message || '插件健康数据加载失败'
+  } finally {
+    pluginHealthLoading.value = false
+  }
+}
+
 function loadFavorites(): Favorite[] {
   try {
     const stored = JSON.parse(localStorage.getItem('pansou_favorites') || '[]')
@@ -95,6 +125,7 @@ async function submitLogin() {
 onMounted(async () => {
   try {
     health.value = await getHealth()
+    if (health.value.plugins_enabled) await loadPluginHealth()
   } catch {
     health.value = null
   }
@@ -107,6 +138,9 @@ onMounted(async () => {
       <a class="brand" href="#"><span class="brand-mark">P</span><span>PanSou</span></a>
       <div class="top-actions">
         <span class="status" :class="{ offline: !health }"><i></i>{{ health ? '服务正常' : '服务未连接' }}</span>
+        <el-badge v-if="health?.plugins_enabled" :value="unhealthyPluginCount" :hidden="!unhealthyPluginCount" type="danger">
+          <el-button text :icon="Monitor" @click="loadPluginHealth(true)">插件健康</el-button>
+        </el-badge>
         <el-button v-if="health?.auth_enabled" text :icon="Lock" @click="loginVisible = true">登录</el-button>
       </div>
     </header>
@@ -189,6 +223,37 @@ onMounted(async () => {
     </main>
 
     <footer>PanSou Web · 结果来自已配置的频道与插件，请自行判断资源有效性。</footer>
+
+
+    <el-drawer v-model="pluginHealthVisible" title="插件运行健康度" size="min(680px, 94vw)" class="health-drawer">
+      <div class="health-toolbar">
+        <div><strong>{{ pluginHealth.length }} 个插件</strong><span>{{ unhealthyPluginCount ? `${unhealthyPluginCount} 个需要关注` : '运行状态良好' }}</span></div>
+        <el-button :icon="Refresh" :loading="pluginHealthLoading" @click="loadPluginHealth()">刷新</el-button>
+      </div>
+      <el-alert v-if="pluginHealthError" :title="pluginHealthError" type="error" :closable="false" show-icon />
+      <el-empty v-else-if="!pluginHealthLoading && !pluginHealth.length" description="运行搜索后将显示插件指标" />
+      <div v-loading="pluginHealthLoading" class="health-list">
+        <article v-for="plugin in pluginHealth" :key="plugin.name" class="health-card" :class="{ danger: plugin.circuit_open }">
+          <div class="health-card-head">
+            <div><h3>{{ plugin.name }}</h3><small>{{ plugin.requests }} 次调用</small></div>
+            <el-tag :type="plugin.circuit_open ? 'danger' : plugin.failures ? 'warning' : 'success'" effect="light">{{ plugin.circuit_open ? '熔断中' : plugin.failures ? '有异常' : '正常' }}</el-tag>
+          </div>
+          <div class="health-metrics">
+            <div><strong>{{ successRate(plugin) }}%</strong><span>成功率</span></div>
+            <div><strong>{{ Math.round(plugin.average_latency_ms) }} ms</strong><span>平均延迟</span></div>
+            <div><strong>{{ plugin.failures }}</strong><span>失败</span></div>
+            <div><strong>{{ plugin.timeouts }}</strong><span>超时</span></div>
+            <div><strong>{{ plugin.empty_results }}</strong><span>空结果</span></div>
+            <div><strong>{{ plugin.consecutive_failures }}</strong><span>连续失败</span></div>
+          </div>
+          <div class="health-times">
+            <span>最近成功：{{ formatDate(plugin.last_success_at) }}</span>
+            <span>最近失败：{{ formatDate(plugin.last_failure_at) }}</span>
+            <span v-if="plugin.circuit_open">重试时间：{{ formatDate(plugin.circuit_retry_at) }}</span>
+          </div>
+        </article>
+      </div>
+    </el-drawer>
 
     <el-dialog v-model="loginVisible" title="登录 PanSou" width="min(420px, 92vw)">
       <el-form label-position="top" @submit.prevent="submitLogin">
